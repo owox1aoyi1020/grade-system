@@ -1,0 +1,33 @@
+cookie:
+  expiry_days: 7
+  key: "grade_portal_secret_key"
+  name: "grade_portal_cookie"
+
+credentials:
+  usernames:
+    admin:
+      name: "鄭右玫 老師"
+      password: "123456"
+      role: "admin"
+    "1":
+      name: "王佑宇"
+      password: ""
+      role: "student"
+    "2":
+      name: "lintingyi"
+      password: "1020"
+      role: "student"
+    "9":
+      name: "林禹宏"
+      password: "1226"
+      role: "student"
+    "24":
+      name: "ab"
+      password: "0712"
+      role: "student"
+    "29":
+      name: "吳沂瑄"
+      password: "0709"
+      role: "student"
+preauthorized:
+  emails: []
