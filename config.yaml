@@ -29,5 +29,10 @@ credentials:
       name: "吳沂瑄"
       password: "0709"
       role: "student"
+    "47":
+      name: "林立凡"
+      password: "1109"
+      role: "student"
 preauthorized:
   emails: []
+
