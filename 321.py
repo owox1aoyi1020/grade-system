@@ -117,12 +117,21 @@ def seat_to_str(v) -> str:
 
 def to_float_or_none(s: str):
     s = clean_text(s)
-    if s in ("", "-", "—", "－"):
+    if s in ("", "-", "—", "－", "缺考", "免試", "請假", "未交", "缺", "無"):
         return None
     try:
         return float(s)
     except Exception:
         return None
+
+
+def is_hidden_score(s: str) -> bool:
+    s = clean_text(s)
+    hidden_values = {
+        "", "nan", "none", "-", "—", "－",
+        "缺考", "免試", "請假", "未交", "缺", "無"
+    }
+    return s.lower() in hidden_values or s in hidden_values
 
 
 # ===================== 解析Excel =====================
@@ -191,8 +200,9 @@ def build_student_view(data, subjects, evals, seat_idx, name_idx, seat_value: st
     for j in range(n_cols):
         if j in (seat_idx, name_idx):
             continue
+
         sval = clean_text(target.iloc[j])
-        if sval == "" or sval.lower() in ("nan", "none"):
+        if is_hidden_score(sval):
             continue
 
         subj = subjects[j] if j < len(subjects) else ""
@@ -221,8 +231,9 @@ def build_student_view_by_row(data, subjects, evals, seat_idx, name_idx, row) ->
     for j in range(n_cols):
         if j in (seat_idx, name_idx):
             continue
+
         sval = clean_text(row.iloc[j])
-        if sval == "" or sval.lower() in ("nan", "none"):
+        if is_hidden_score(sval):
             continue
 
         subj = subjects[j] if j < len(subjects) else ""
@@ -251,9 +262,11 @@ def compute_class_avg(data, subjects, evals, seat_idx, name_idx):
         for j in range(n_cols):
             if j in (seat_idx, name_idx):
                 continue
+
             sval = clean_text(row.iloc[j])
-            if sval == "" or sval.lower() in ("nan", "none"):
+            if is_hidden_score(sval):
                 continue
+
             num = to_float_or_none(sval)
             if num is None:
                 continue
@@ -278,12 +291,15 @@ def compute_student_overall_avg(row, seat_idx, name_idx):
     for j in range(len(row)):
         if j in (seat_idx, name_idx):
             continue
+
         sval = clean_text(row.iloc[j])
-        if sval == "" or sval.lower() in ("nan", "none"):
+        if is_hidden_score(sval):
             continue
+
         num = to_float_or_none(sval)
         if num is None:
             continue
+
         nums.append(num)
 
     if not nums:
@@ -800,28 +816,30 @@ else:
             if compare.empty:
                 st.warning("目前沒有可用的數字資料可以畫圖（班平均/我的平均可能都是空或非數字）。")
             else:
-                 line_df = compare.melt(id_vars=["科目"], value_vars=["班級平均", "我的平均"],
-                       var_name="類別", value_name="分數").dropna()
-                 chart = (
-                        alt.Chart(line_df)
-                        .mark_line(point=True)
-                        .encode(
-                             x=alt.X("科目:N", title=None),
-                             y=alt.Y("分數:Q", title="分數"),
-                            color=alt.Color("類別:N", legend=alt.Legend(title=None)),
-                            tooltip=["科目:N", "類別:N", alt.Tooltip("分數:Q", format=".1f")]
-                        )
+                line_df = compare.melt(
+                    id_vars=["科目"],
+                    value_vars=["班級平均", "我的平均"],
+                    var_name="類別",
+                    value_name="分數"
+                ).dropna()
+
+                chart = (
+                    alt.Chart(line_df)
+                    .mark_line(point=True)
+                    .encode(
+                        x=alt.X("科目:N", title=None),
+                        y=alt.Y("分數:Q", title="分數"),
+                        color=alt.Color("類別:N", legend=alt.Legend(title=None)),
+                        tooltip=["科目:N", "類別:N", alt.Tooltip("分數:Q", format=".1f")]
+                    )
                     .properties(height=320)
-                 )
-st.altair_chart(chart,use_container_width=True)
-                
-pdf_bytes = make_single_student_pdf_bytes(student, title_text=meta.get("title_text", "成績"))
-st.download_button(
-    "⬇️ 下載我的 PDF 成績單",
-     data=pdf_bytes,
-    file_name=f"score_{seat_value}.pdf",
-    mime="application/pdf"
+                )
+                st.altair_chart(chart, use_container_width=True)
+
+    pdf_bytes = make_single_student_pdf_bytes(student, title_text=meta.get("title_text", "成績"))
+    st.download_button(
+        "⬇️ 下載我的 PDF 成績單",
+        data=pdf_bytes,
+        file_name=f"score_{seat_value}.pdf",
+        mime="application/pdf"
     )
-
-
-# &"D:\新增資料夾\python.exe" -m streamlit run "C:\Users\ryan\Desktop\軟體\321.py"
