@@ -525,12 +525,12 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str, student
     base_styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "BigTitle", parent=base_styles["Title"],
-        fontName=FONT, fontSize=16, leading=18,
+        fontName=FONT, fontSize=17, leading=20,
         alignment=1, spaceAfter=4
     )
     info_style = ParagraphStyle(
         "Info", parent=base_styles["Normal"],
-        fontName=FONT, fontSize=9, leading=11, spaceAfter=2
+        fontName=FONT, fontSize=10, leading=12, spaceAfter=2
     )
     summary_style = ParagraphStyle(
         "Summary", parent=base_styles["Normal"],
@@ -555,17 +555,17 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str, student
         ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
         ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
     ]))
     content.append(info_table)
     content.append(Spacer(1, 0.12 * cm))
 
     table_rows = [["科目", "評量範圍", "分數"]] + scores_df[["科目", "評量範圍", "分數"]].values.tolist()
-    table = Table(table_rows, colWidths=[3.3 * cm, 11.4 * cm, 2.2 * cm], repeatRows=1)
+    score_table = Table(table_rows, colWidths=[3.7 * cm, 10.9 * cm, 2.3 * cm], repeatRows=1)
     style_cmds = [
         ("FONTNAME", (0, 0), (-1, -1), FONT),
-        ("FONTSIZE", (0, 0), (-1, -1), 8.2),
+        ("FONTSIZE", (0, 0), (-1, -1), 10.0),
         ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
         ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
@@ -579,21 +579,12 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str, student
     for r in range(1, len(table_rows)):
         if r % 2 == 1:
             style_cmds.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#F7F7F7")))
-    table.setStyle(TableStyle(style_cmds))
-    content.append(table)
+    score_table.setStyle(TableStyle(style_cmds))
+    content.append(score_table)
 
-    if numeric:
-        content.append(Spacer(1, 0.08 * cm))
-        lines = [
-            f"可計算 {len(numeric)} 筆",
-            f"最高：{mx:.1f}　最低：{mn:.1f}　平均：{avg:.1f}",
-        ]
-        content.append(Paragraph("<br/>".join(lines), summary_style))
-
+    bench_table = None
     if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
-        content.append(Spacer(1, 0.08 * cm))
-        content.append(Paragraph("頂前均後底標", info_style))
-        bench_rows = [["欄位", "頂", "前", "均", "後", "底"]]
+        bench_rows = [["頂前均後底標", "頂", "前", "均", "後", "底"]]
         for _, r in student_bench_df.iterrows():
             bench_rows.append([
                 str(r.get("欄位", "")),
@@ -603,18 +594,54 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str, student
                 str(r.get("後標", "")),
                 str(r.get("底標", "")),
             ])
-        bench_table = Table(bench_rows, colWidths=[7.2 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm], repeatRows=1)
+        bench_table = Table(bench_rows, colWidths=[4.8 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm], repeatRows=1)
         bench_table.setStyle(TableStyle([
             ("FONTNAME", (0, 0), (-1, -1), FONT),
-            ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-            ("BOX", (0, 0), (-1, -1), 0.6, colors.black),
-            ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("FONTSIZE", (0, 0), (-1, -1), 5.9),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.black),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ECECEC")),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 1),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
         ]))
-        content.append(bench_table)
+
+    if numeric:
+        summary_lines = [
+            f"可計算 {len(numeric)} 筆",
+            f"最高：{mx:.1f}",
+            f"最低：{mn:.1f}",
+            f"平均：{avg:.1f}",
+        ]
+    else:
+        summary_lines = ["無可計算分數"]
+
+    summary_box = Table(
+        [[Paragraph("<br/>".join(summary_lines), summary_style)]],
+        colWidths=[9.6 * cm]
+    )
+    summary_box.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+
+    content.append(Spacer(1, 0.12 * cm))
+    if bench_table is not None:
+        bottom_table = Table([[bench_table, summary_box]], colWidths=[7.6 * cm, 9.6 * cm])
+        bottom_table.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        content.append(bottom_table)
+    else:
+        content.append(summary_box)
 
     available_width = A4[0] - 1.0 * cm - 1.0 * cm
     available_height = A4[1] - 1.0 * cm - 1.0 * cm
@@ -637,12 +664,12 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
 
     title_style = ParagraphStyle(
         "BigTitle", parent=base_styles["Title"],
-        fontName=FONT, fontSize=16, leading=18,
+        fontName=FONT, fontSize=17, leading=20,
         alignment=1, spaceAfter=4
     )
     info_style = ParagraphStyle(
         "Info", parent=base_styles["Normal"],
-        fontName=FONT, fontSize=9, leading=11, spaceAfter=2
+        fontName=FONT, fontSize=10, leading=12, spaceAfter=2
     )
     summary_style = ParagraphStyle(
         "Summary", parent=base_styles["Normal"],
@@ -672,17 +699,17 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
             ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
             ("LEFTPADDING", (0, 0), (-1, -1), 4),
             ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ]))
         content.append(info_table)
         content.append(Spacer(1, 0.12 * cm))
 
         table_rows = [["科目", "評量範圍", "分數"]] + scores_df[["科目", "評量範圍", "分數"]].values.tolist()
-        table = Table(table_rows, colWidths=[3.3 * cm, 11.4 * cm, 2.2 * cm], repeatRows=1)
+        score_table = Table(table_rows, colWidths=[3.7 * cm, 10.9 * cm, 2.3 * cm], repeatRows=1)
         style_cmds = [
             ("FONTNAME", (0, 0), (-1, -1), FONT),
-            ("FONTSIZE", (0, 0), (-1, -1), 8.2),
+            ("FONTSIZE", (0, 0), (-1, -1), 10.0),
             ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
             ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
             ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
@@ -696,25 +723,16 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
         for r in range(1, len(table_rows)):
             if r % 2 == 1:
                 style_cmds.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#F7F7F7")))
-        table.setStyle(TableStyle(style_cmds))
-        content.append(table)
-
-        if numeric:
-            content.append(Spacer(1, 0.08 * cm))
-            lines = [
-                f"可計算 {len(numeric)} 筆",
-                f"最高：{mx:.1f}　最低：{mn:.1f}　平均：{avg:.1f}",
-            ]
-            content.append(Paragraph("<br/>".join(lines), summary_style))
+        score_table.setStyle(TableStyle(style_cmds))
+        content.append(score_table)
 
         student_bench_df = None
         if benchmark_map:
             student_bench_df = benchmark_map.get(student.seat)
 
+        bench_table = None
         if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
-            content.append(Spacer(1, 0.08 * cm))
-            content.append(Paragraph("頂前均後底標", info_style))
-            bench_rows = [["欄位", "頂", "前", "均", "後", "底"]]
+            bench_rows = [["頂前均後底標", "頂", "前", "均", "後", "底"]]
             for _, r in student_bench_df.iterrows():
                 bench_rows.append([
                     str(r.get("欄位", "")),
@@ -724,18 +742,54 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
                     str(r.get("後標", "")),
                     str(r.get("底標", "")),
                 ])
-            bench_table = Table(bench_rows, colWidths=[7.2 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm], repeatRows=1)
+            bench_table = Table(bench_rows, colWidths=[4.8 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm], repeatRows=1)
             bench_table.setStyle(TableStyle([
                 ("FONTNAME", (0, 0), (-1, -1), FONT),
-                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-                ("BOX", (0, 0), (-1, -1), 0.6, colors.black),
-                ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("FONTSIZE", (0, 0), (-1, -1), 5.9),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.black),
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#ECECEC")),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("TOPPADDING", (0, 0), (-1, -1), 2),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("TOPPADDING", (0, 0), (-1, -1), 1),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
             ]))
-            content.append(bench_table)
+
+        if numeric:
+            summary_lines = [
+                f"可計算 {len(numeric)} 筆",
+                f"最高：{mx:.1f}",
+                f"最低：{mn:.1f}",
+                f"平均：{avg:.1f}",
+            ]
+        else:
+            summary_lines = ["無可計算分數"]
+
+        summary_box = Table(
+            [[Paragraph("<br/>".join(summary_lines), summary_style)]],
+            colWidths=[9.6 * cm]
+        )
+        summary_box.setStyle(TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]))
+
+        content.append(Spacer(1, 0.12 * cm))
+        if bench_table is not None:
+            bottom_table = Table([[bench_table, summary_box]], colWidths=[7.6 * cm, 9.6 * cm])
+            bottom_table.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]))
+            content.append(bottom_table)
+        else:
+            content.append(summary_box)
 
         fitted = KeepInFrame(available_width, available_height, content, mode="shrink")
         story.append(fitted)
