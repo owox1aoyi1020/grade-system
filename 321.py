@@ -1062,7 +1062,7 @@ else:
                 )
                 st.altair_chart(chart, use_container_width=True)
 
-    with st.expander("📈 與其他段考比較", expanded=False):
+    with st.expander("📈 與其他小考比較", expanded=False):
         compare_candidates = [eid for eid, _ in exam_choices if eid != selected_exam]
         if not compare_candidates:
             st.info("目前只有一份考試資料，還不能比較。")
