@@ -1,4 +1,3 @@
-
 import altair as alt
 import io
 import os
@@ -247,7 +246,7 @@ def labels_to_indices(score_columns, labels):
     return [c["index"] for c in score_columns if c["label"] in label_set]
 
 
-def make_analysis_config(score_columns, avg_labels, benchmark_labels, compare_labels):
+def make_analysis_config(score_columns, avg_labels, benchmark_labels, compare_labels, pdf_include_benchmarks=False):
     return {
         "avg_fields": avg_labels or [],
         "benchmark_fields": benchmark_labels or [],
@@ -255,6 +254,7 @@ def make_analysis_config(score_columns, avg_labels, benchmark_labels, compare_la
         "avg_indices": labels_to_indices(score_columns, avg_labels),
         "benchmark_indices": labels_to_indices(score_columns, benchmark_labels),
         "compare_indices": labels_to_indices(score_columns, compare_labels),
+        "pdf_include_benchmarks": bool(pdf_include_benchmarks),
     }
 
 
@@ -454,6 +454,17 @@ def compute_benchmark_table(data, subjects, evals, seat_idx, name_idx, benchmark
     return pd.DataFrame(rows)
 
 
+def filter_benchmarks_for_student(bench_df, student_scores_df):
+    if bench_df.empty or student_scores_df.empty:
+        return bench_df.iloc[0:0].copy()
+
+    own_labels = set(student_scores_df["欄位標籤"].dropna().astype(str).tolist())
+    own_subjects = set(student_scores_df["科目"].dropna().astype(str).tolist())
+
+    mask = bench_df["欄位"].astype(str).isin(own_labels) | bench_df["欄位"].astype(str).isin(own_subjects)
+    return bench_df[mask].copy()
+
+
 def get_exam_choices(store):
     exams = store.get("exams", {})
     items = []
@@ -510,7 +521,7 @@ def build_compare_table(student_view: StudentView, compare_indices):
 
 
 # ===================== PDF：單一學生 =====================
-def make_single_student_pdf_bytes(student: StudentView, title_text: str):
+def make_single_student_pdf_bytes(student: StudentView, title_text: str, student_bench_df=None, include_benchmarks=False):
     base_styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "BigTitle", parent=base_styles["Title"],
@@ -584,6 +595,30 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str):
 
     story.append(Paragraph("<br/>".join(lines), summary_style))
 
+    if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
+        story.append(Spacer(1, 0.3 * cm))
+        story.append(Paragraph("頂前均後底標", info_style))
+        bench_rows = [["欄位", "頂標", "前標", "均標", "後標", "底標"]]
+        for _, r in student_bench_df.iterrows():
+            bench_rows.append([
+                str(r.get("欄位", "")),
+                str(r.get("頂標", "")),
+                str(r.get("前標", "")),
+                str(r.get("均標", "")),
+                str(r.get("後標", "")),
+                str(r.get("底標", "")),
+            ])
+        bench_table = Table(bench_rows, colWidths=[6.0 * cm, 2.2 * cm, 2.2 * cm, 2.2 * cm, 2.2 * cm, 2.2 * cm])
+        bench_table.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, -1), FONT),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
+            ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+        story.append(bench_table)
+
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
@@ -596,7 +631,7 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str):
 
 
 # ===================== PDF：全班（students list） =====================
-def make_class_pdf_from_students(students: list, title_text: str):
+def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=None, include_benchmarks=False):
     base_styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
@@ -671,6 +706,34 @@ def make_class_pdf_from_students(students: list, title_text: str):
         else:
             lines = ["‧ 沒有可計算的數字分數（可能都是缺考/免試/文字）"]
         story.append(Paragraph("<br/>".join(lines), summary_style))
+
+        student_bench_df = None
+        if benchmark_map:
+            student_bench_df = benchmark_map.get(student.seat)
+
+        if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
+            story.append(Spacer(1, 0.3 * cm))
+            story.append(Paragraph("頂前均後底標", info_style))
+            bench_rows = [["欄位", "頂標", "前標", "均標", "後標", "底標"]]
+            for _, r in student_bench_df.iterrows():
+                bench_rows.append([
+                    str(r.get("欄位", "")),
+                    str(r.get("頂標", "")),
+                    str(r.get("前標", "")),
+                    str(r.get("均標", "")),
+                    str(r.get("後標", "")),
+                    str(r.get("底標", "")),
+                ])
+            bench_table = Table(bench_rows, colWidths=[6.0 * cm, 2.2 * cm, 2.2 * cm, 2.2 * cm, 2.2 * cm, 2.2 * cm])
+            bench_table.setStyle(TableStyle([
+                ("FONTNAME", (0, 0), (-1, -1), FONT),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ]))
+            story.append(bench_table)
 
         if i != len(students) - 1:
             story.append(PageBreak())
@@ -783,6 +846,7 @@ if role == "admin":
                 all_labels,
                 default=default_main
             )
+            pdf_include_benchmarks = st.checkbox("成績單 PDF 要列印頂前均後底標", value=False)
 
             with st.expander("預覽前 5 列", expanded=False):
                 st.dataframe(data_admin.head(5), use_container_width=True)
@@ -801,7 +865,8 @@ if role == "admin":
                     "rows": int(len(data_admin)),
                 }
                 analysis_config = make_analysis_config(
-                    score_columns_admin, avg_labels, benchmark_labels, compare_labels
+                    score_columns_admin, avg_labels, benchmark_labels, compare_labels,
+                    pdf_include_benchmarks=pdf_include_benchmarks
                 )
 
                 store = load_store()
@@ -866,7 +931,7 @@ if role == "admin":
     analysis_config2 = dataset["analysis_config"]
 
     st.caption(
-        f"考試名稱：{meta2.get('exam_name','-')}｜資料筆數：{meta2.get('rows','-')}｜更新時間：{meta2.get('updated_at','-')}"
+        f"考試名稱：{meta2.get('exam_name','-')}｜資料筆數：{meta2.get('rows','-')}｜更新時間：{meta2.get('updated_at','-')}｜PDF列印五標：{'是' if analysis_config2.get('pdf_include_benchmarks') else '否'}"
     )
 
     excel_filename = f"original_{meta2.get('exam_name','scores')}_{meta2.get('updated_at','')}.xlsx".replace(":", "-")
@@ -922,7 +987,20 @@ if role == "admin":
                 build_student_view_by_row(data2, subjects2, evals2, seat_idx2, name_idx2, r)
                 for r in rows_list
             ]
-            class_pdf = make_class_pdf_from_students(students, title_text=meta2.get("title_text", "成績"))
+            bench_full_df = compute_benchmark_table(
+                data2, subjects2, evals2, seat_idx2, name_idx2,
+                benchmark_indices=analysis_config2.get("benchmark_indices", [])
+            )
+            benchmark_map = {}
+            for stu in students:
+                benchmark_map[stu.seat] = filter_benchmarks_for_student(bench_full_df, stu.scores_df)
+
+            class_pdf = make_class_pdf_from_students(
+                students,
+                title_text=meta2.get("title_text", "成績"),
+                benchmark_map=benchmark_map,
+                include_benchmarks=analysis_config2.get("pdf_include_benchmarks", False)
+            )
             pdf_name = f"class_scores_{meta2.get('exam_name','scores')}_{meta2.get('updated_at','')}.pdf".replace(":", "-")
 
             st.download_button(
@@ -1062,7 +1140,7 @@ else:
                 )
                 st.altair_chart(chart, use_container_width=True)
 
-    with st.expander("📈 與其他小考比較", expanded=False):
+    with st.expander("📈 與其他段考比較", expanded=False):
         compare_candidates = [eid for eid, _ in exam_choices if eid != selected_exam]
         if not compare_candidates:
             st.info("目前只有一份考試資料，還不能比較。")
@@ -1103,12 +1181,24 @@ else:
             data, subjects, evals, seat_idx, name_idx,
             benchmark_indices=analysis_config.get("benchmark_indices", [])
         )
-        if bench_df.empty:
-            st.info("老師這份考試沒有設定五標欄位。")
+        student_bench_df = filter_benchmarks_for_student(bench_df, student.scores_df)
+        if student_bench_df.empty:
+            st.info("老師這份考試沒有設定屬於你這次成績的五標欄位。")
         else:
-            st.dataframe(bench_df, use_container_width=True)
+            st.dataframe(student_bench_df, use_container_width=True)
 
-    pdf_bytes = make_single_student_pdf_bytes(student, title_text=meta.get("title_text", "成績"))
+    bench_df_for_pdf = compute_benchmark_table(
+        data, subjects, evals, seat_idx, name_idx,
+        benchmark_indices=analysis_config.get("benchmark_indices", [])
+    )
+    student_bench_df_for_pdf = filter_benchmarks_for_student(bench_df_for_pdf, student.scores_df)
+
+    pdf_bytes = make_single_student_pdf_bytes(
+        student,
+        title_text=meta.get("title_text", "成績"),
+        student_bench_df=student_bench_df_for_pdf,
+        include_benchmarks=analysis_config.get("pdf_include_benchmarks", False)
+    )
     st.download_button(
         "⬇️ 下載我的 PDF 成績單",
         data=pdf_bytes,
