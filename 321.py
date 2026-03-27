@@ -465,6 +465,25 @@ def filter_benchmarks_for_student(bench_df, student_scores_df):
     return bench_df[mask].copy()
 
 
+def compact_benchmarks_for_pdf(bench_df, max_rows=5):
+    if bench_df is None or bench_df.empty:
+        return bench_df
+
+    df = bench_df.copy()
+    df["_priority"] = 0
+    keywords = ["總分", "平均", "段考", "期中", "期末", "國文", "英文", "數學", "數A", "數B", "自然", "社會"]
+    for kw in keywords:
+        df.loc[df["欄位"].astype(str).str.contains(kw, na=False), "_priority"] += 10
+
+    low_keywords = ["單字", "作業", "閱讀", "默寫", "聽寫", "小考", "句型", "注釋", "雜誌"]
+    for kw in low_keywords:
+        df.loc[df["欄位"].astype(str).str.contains(kw, na=False), "_priority"] -= 3
+
+    df["_len"] = df["欄位"].astype(str).str.len()
+    df = df.sort_values(["_priority", "_len", "欄位"], ascending=[False, True, True]).head(max_rows)
+    return df.drop(columns=["_priority", "_len"])
+
+
 def get_exam_choices(store):
     exams = store.get("exams", {})
     items = []
@@ -1052,7 +1071,7 @@ if role == "admin":
             )
             benchmark_map = {}
             for stu in students:
-                benchmark_map[stu.seat] = filter_benchmarks_for_student(bench_full_df, stu.scores_df)
+                benchmark_map[stu.seat] = compact_benchmarks_for_pdf(filter_benchmarks_for_student(bench_full_df, stu.scores_df), max_rows=5)
 
             class_pdf = make_class_pdf_from_students(
                 students,
@@ -1250,7 +1269,7 @@ else:
         data, subjects, evals, seat_idx, name_idx,
         benchmark_indices=analysis_config.get("benchmark_indices", [])
     )
-    student_bench_df_for_pdf = filter_benchmarks_for_student(bench_df_for_pdf, student.scores_df)
+    student_bench_df_for_pdf = compact_benchmarks_for_pdf(filter_benchmarks_for_student(bench_df_for_pdf, student.scores_df), max_rows=5)
 
     pdf_bytes = make_single_student_pdf_bytes(
         student,
