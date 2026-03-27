@@ -32,7 +32,6 @@ TZ_TAIPEI = timezone(timedelta(hours=8))
 DEFAULT_SUBJECT_ROW = 0
 DEFAULT_EVAL_ROW = 1
 DEFAULT_HEADER_ROW = 2
-PDF_BENCHMARK_MAX_ROWS = 8
 
 
 # ===================== 小工具 =====================
@@ -591,13 +590,7 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str, student
         ]
         content.append(Paragraph("<br/>".join(lines), summary_style))
 
-    can_show_benchmarks = (
-        include_benchmarks
-        and student_bench_df is not None
-        and not student_bench_df.empty
-        and len(student_bench_df) <= PDF_BENCHMARK_MAX_ROWS
-    )
-    if can_show_benchmarks:
+    if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
         content.append(Spacer(1, 0.08 * cm))
         content.append(Paragraph("頂前均後底標", info_style))
         bench_rows = [["欄位", "頂", "前", "均", "後", "底"]]
@@ -718,13 +711,7 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
         if benchmark_map:
             student_bench_df = benchmark_map.get(student.seat)
 
-        can_show_benchmarks = (
-            include_benchmarks
-            and student_bench_df is not None
-            and not student_bench_df.empty
-            and len(student_bench_df) <= PDF_BENCHMARK_MAX_ROWS
-        )
-        if can_show_benchmarks:
+        if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
             content.append(Spacer(1, 0.08 * cm))
             content.append(Paragraph("頂前均後底標", info_style))
             bench_rows = [["欄位", "頂", "前", "均", "後", "底"]]
