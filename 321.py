@@ -15,11 +15,13 @@ import streamlit_authenticator as stauth
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, KeepInFrame
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.graphics.shapes import Drawing, String
+from reportlab.graphics.charts.barcharts import VerticalBarChart
 
 
 # ===================== 路徑/基本設定 =====================
@@ -67,38 +69,21 @@ def normalize_store(store):
     if isinstance(store, dict) and "exams" in store:
         store.setdefault("schema_version", 2)
         store.setdefault("active_exam", next(iter(store["exams"]), None))
-        for exam_id, exam in store.get("exams", {}).items():
-            exam.setdefault("meta", {})
-            exam.setdefault("analysis_config", {})
         return store
 
-    if isinstance(store, dict) and "excel_bytes" in store:
-        meta = store.get("meta", {}) if isinstance(store.get("meta", {}), dict) else {}
-        version = meta.get("version") or sha256_hex(store["excel_bytes"])
-        exam_id = version
+    if isinstance(store, dict) and "excel_bytes" in store and "meta" in store:
+        exam_id = store["meta"].get("version", "legacy_exam")
         return {
             "schema_version": 2,
             "active_exam": exam_id,
             "exams": {
                 exam_id: {
                     "excel_bytes": store["excel_bytes"],
-                    "meta": {
-                        "version": version,
-                        "updated_at": meta.get("updated_at", now_taipei_str()),
-                        "sheet": meta.get("sheet", 0),
-                        "subject_row": meta.get("subject_row", DEFAULT_SUBJECT_ROW),
-                        "eval_row": meta.get("eval_row", DEFAULT_EVAL_ROW),
-                        "header_row": meta.get("header_row", DEFAULT_HEADER_ROW),
-                        "title_text": meta.get("title_text", "成績"),
-                        "exam_name": meta.get("exam_name", meta.get("title_text", "舊資料")),
-                        "rows": meta.get("rows", 0),
-                    },
-                    "analysis_config": store.get("analysis_config", {
+                    "meta": store["meta"],
+                    "analysis_config": {
                         "avg_fields": [],
                         "benchmark_fields": [],
-                        "compare_fields": [],
-                        "pdf_print_benchmark": True,
-                    }),
+                        }
                 }
             },
         }
@@ -263,15 +248,13 @@ def labels_to_indices(score_columns, labels):
     return [c["index"] for c in score_columns if c["label"] in label_set]
 
 
-def make_analysis_config(score_columns, avg_labels, benchmark_labels, compare_labels):
+def make_analysis_config(score_columns, avg_labels, benchmark_labels, pdf_include_benchmarks=False):
     return {
         "avg_fields": avg_labels or [],
         "benchmark_fields": benchmark_labels or [],
-        "compare_fields": compare_labels or [],
-        "pdf_print_benchmark": True,
         "avg_indices": labels_to_indices(score_columns, avg_labels),
         "benchmark_indices": labels_to_indices(score_columns, benchmark_labels),
-        "compare_indices": labels_to_indices(score_columns, compare_labels),
+        "pdf_include_benchmarks": bool(pdf_include_benchmarks),
     }
 
 
@@ -471,6 +454,17 @@ def compute_benchmark_table(data, subjects, evals, seat_idx, name_idx, benchmark
     return pd.DataFrame(rows)
 
 
+def filter_benchmarks_for_student(bench_df, student_scores_df):
+    if bench_df.empty or student_scores_df.empty:
+        return bench_df.iloc[0:0].copy()
+
+    own_labels = set(student_scores_df["欄位標籤"].dropna().astype(str).tolist())
+    own_subjects = set(student_scores_df["科目"].dropna().astype(str).tolist())
+
+    mask = bench_df["欄位"].astype(str).isin(own_labels) | bench_df["欄位"].astype(str).isin(own_subjects)
+    return bench_df[mask].copy()
+
+
 def get_exam_choices(store):
     exams = store.get("exams", {})
     items = []
@@ -499,9 +493,6 @@ def load_exam_dataset(exam_obj):
         analysis_config["avg_indices"] = labels_to_indices(score_columns, analysis_config.get("avg_fields", []))
     if not analysis_config.get("benchmark_indices") and analysis_config.get("benchmark_fields") is not None:
         analysis_config["benchmark_indices"] = labels_to_indices(score_columns, analysis_config.get("benchmark_fields", []))
-    if not analysis_config.get("compare_indices") and analysis_config.get("compare_fields") is not None:
-        analysis_config["compare_indices"] = labels_to_indices(score_columns, analysis_config.get("compare_fields", []))
-    analysis_config.setdefault("pdf_print_benchmark", True)
 
     return {
         "excel_bytes": excel_bytes,
@@ -516,7 +507,7 @@ def load_exam_dataset(exam_obj):
     }
 
 
-def build_compare_table(student_view: StudentView, compare_indices):
+def build_compare_table(student_view: StudentView, compare_indices=None):
     if student_view.scores_df.empty:
         return pd.DataFrame(columns=["科目", "分數"])
     df = student_view.scores_df.copy()
@@ -527,227 +518,268 @@ def build_compare_table(student_view: StudentView, compare_indices):
     return df[["科目", "分數數字"]].dropna().groupby("科目", as_index=False)["分數數字"].mean().rename(columns={"分數數字": "分數"})
 
 
-def filter_benchmark_table_for_student(bench_df: pd.DataFrame, student_view: StudentView):
-    if bench_df is None or bench_df.empty:
-        return pd.DataFrame(columns=["欄位", "頂標", "前標", "均標", "後標", "底標", "樣本數"])
-    own_labels = set(student_view.scores_df.get("欄位標籤", pd.Series(dtype=str)).dropna().astype(str).tolist())
-    if not own_labels:
-        return pd.DataFrame(columns=bench_df.columns)
-    out = bench_df[bench_df["欄位"].isin(own_labels)].copy()
-    return out.reset_index(drop=True)
+def build_pdf_compare_chart(compare_df: pd.DataFrame):
+    if compare_df is None or compare_df.empty:
+        return None
 
+    compare_df = compare_df.copy().dropna(subset=["班級平均", "我的成績"], how="all")
+    if compare_df.empty:
+        return None
 
-def chart_compare_dataframe(student_view: StudentView, class_avg_df: pd.DataFrame, allowed_indices=None):
-    mine_num = student_view.scores_df.dropna(subset=["分數數字"]).copy()
-    if allowed_indices:
-        mine_num = mine_num[mine_num["欄位索引"].isin(allowed_indices)].copy()
-    if mine_num.empty:
-        return pd.DataFrame(columns=["科目", "班級平均", "我的成績"])
+    compare_df = compare_df.head(6).fillna(0)
+    labels = [str(x)[:8] for x in compare_df["科目"].tolist()]
+    class_vals = [float(x) if pd.notna(x) else 0.0 for x in compare_df["班級平均"].tolist()]
+    my_vals = [float(x) if pd.notna(x) else 0.0 for x in compare_df["我的成績"].tolist()]
 
-    mine_by_subj = (
-        mine_num.groupby("科目", as_index=False)["分數數字"]
-        .mean()
-        .rename(columns={"分數數字": "我的成績"})
-    )
-    class_avg2 = (
-        class_avg_df.groupby("科目", as_index=False)["班級平均"].mean()
-        if not class_avg_df.empty else pd.DataFrame(columns=["科目", "班級平均"])
-    )
-    compare = pd.merge(class_avg2, mine_by_subj, on="科目", how="outer")
-    compare["班級平均"] = pd.to_numeric(compare["班級平均"], errors="coerce")
-    compare["我的成績"] = pd.to_numeric(compare["我的成績"], errors="coerce")
-    compare = compare.dropna(subset=["班級平均", "我的成績"], how="all")
-    return compare
+    d = Drawing(8.2 * cm, 5.3 * cm)
+    chart = VerticalBarChart()
+    chart.x = 20
+    chart.y = 18
+    chart.height = 84
+    chart.width = 178
+    chart.data = [class_vals, my_vals]
+    chart.categoryAxis.categoryNames = labels
+    chart.categoryAxis.labels.fontName = FONT
+    chart.categoryAxis.labels.fontSize = 7
+    chart.valueAxis.labels.fontName = FONT
+    chart.valueAxis.labels.fontSize = 7
+    chart.valueAxis.valueMin = 0
+    vmax = max(class_vals + my_vals + [100])
+    chart.valueAxis.valueMax = max(100, int((vmax + 9) // 10) * 10)
+    chart.valueAxis.valueStep = 20
+    chart.barSpacing = 3
+    chart.groupSpacing = 8
+    chart.bars[0].fillColor = colors.HexColor("#AFC8FF")
+    chart.bars[1].fillColor = colors.HexColor("#FFB4A2")
+    d.add(chart)
+    d.add(String(8, 108, "班級平均", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#4F6FAF")))
+    d.add(String(82, 108, "我的成績", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#C35B3E")))
+    return d
 
 
 # ===================== PDF：單一學生 =====================
-def make_single_student_pdf_bytes(student: StudentView, title_text: str, benchmark_df=None, pdf_print_benchmark=True):
+def make_single_student_pdf_bytes(student: StudentView, title_text: str, student_bench_df=None, include_benchmarks=False, compare_df=None):
     base_styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "BigTitle", parent=base_styles["Title"],
-        fontName=FONT, fontSize=18, leading=22,
-        alignment=1, spaceAfter=6
+        fontName=FONT, fontSize=16, leading=18,
+        alignment=1, spaceAfter=4
     )
     info_style = ParagraphStyle(
         "Info", parent=base_styles["Normal"],
-        fontName=FONT, fontSize=11, leading=13, spaceAfter=4
+        fontName=FONT, fontSize=9, leading=11, spaceAfter=2
     )
 
     scores_df = student.scores_df.copy()
     numeric = scores_df["分數數字"].dropna().tolist()
     avg = (sum(numeric) / len(numeric)) if numeric else None
 
-    story = []
-    story.append(Paragraph(f"{title_text} 成績單", title_style))
-    story.append(Spacer(1, 0.15 * cm))
+    content = []
+    content.append(Paragraph(f"{title_text} 成績單", title_style))
+    content.append(Spacer(1, 0.08 * cm))
 
     extra_avg = f"　平均：{avg:.1f} 分" if avg is not None else ""
     info_text = f"姓名：{student.name}　座號：{student.seat}{extra_avg}"
-    info_table = Table([[Paragraph(info_text, info_style)]], colWidths=[18 * cm])
+    info_table = Table([[Paragraph(info_text, info_style)]], colWidths=[18.0 * cm])
     info_table.setStyle(TableStyle([
         ("BOX", (0, 0), (-1, -1), 0.6, colors.grey),
         ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
-    story.append(info_table)
-    story.append(Spacer(1, 0.22 * cm))
+    content.append(info_table)
+    content.append(Spacer(1, 0.12 * cm))
 
     table_rows = [["科目", "評量範圍", "分數"]] + scores_df[["科目", "評量範圍", "分數"]].values.tolist()
-    table = Table(table_rows, colWidths=[4.2 * cm, 10.1 * cm, 2.4 * cm])
+    table = Table(table_rows, colWidths=[3.3 * cm, 11.4 * cm, 2.2 * cm], repeatRows=1)
     style_cmds = [
         ("FONTNAME", (0, 0), (-1, -1), FONT),
-        ("FONTSIZE", (0, 0), (-1, -1), 11),
-        ("BOX", (0, 0), (-1, -1), 0.9, colors.black),
+        ("FONTSIZE", (0, 0), (-1, -1), 8.8),
+        ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
         ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
         ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
         ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("ALIGN", (1, 1), (1, -1), "LEFT"),
         ("ALIGN", (2, 1), (2, -1), "CENTER"),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
     ]
     for r in range(1, len(table_rows)):
         if r % 2 == 1:
             style_cmds.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#F7F7F7")))
     table.setStyle(TableStyle(style_cmds))
-    story.append(table)
+    content.append(table)
 
-    if pdf_print_benchmark and benchmark_df is not None and not benchmark_df.empty:
-        story.append(Spacer(1, 0.18 * cm))
+    bench_table = None
+    if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
         bench_rows = [["欄位", "頂", "前", "均", "後", "底"]]
-        for _, r in benchmark_df.iterrows():
-            bench_rows.append([
-                str(r["欄位"]), f"{r['頂標']:.1f}", f"{r['前標']:.1f}", f"{r['均標']:.1f}", f"{r['後標']:.1f}", f"{r['底標']:.1f}"
-            ])
-        bench_table = Table(bench_rows, colWidths=[6.0 * cm, 1.4 * cm, 1.4 * cm, 1.4 * cm, 1.4 * cm, 1.4 * cm])
+        for _, r in student_bench_df.iterrows():
+            bench_rows.append([str(r["欄位"]), f"{r['頂標']:.1f}", f"{r['前標']:.1f}", f"{r['均標']:.1f}", f"{r['後標']:.1f}", f"{r['底標']:.1f}"])
+        bench_table = Table(bench_rows, colWidths=[3.8 * cm, 0.9 * cm, 0.9 * cm, 0.9 * cm, 0.9 * cm, 0.9 * cm])
         bench_table.setStyle(TableStyle([
             ("FONTNAME", (0, 0), (-1, -1), FONT),
             ("FONTSIZE", (0, 0), (-1, -1), 7),
             ("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
             ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
             ("ALIGN", (1, 1), (-1, -1), "CENTER"),
             ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 3),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
             ("TOPPADDING", (0, 0), (-1, -1), 2),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ]))
-        story.append(bench_table)
+
+    chart = build_pdf_compare_chart(compare_df)
+    if bench_table is not None or chart is not None:
+        content.append(Spacer(1, 0.14 * cm))
+        bottom = Table([[bench_table if bench_table is not None else Spacer(1, 0.1 * cm),
+                         chart if chart is not None else Spacer(1, 0.1 * cm)]],
+                       colWidths=[8.8 * cm, 8.8 * cm])
+        bottom.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        content.append(bottom)
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        rightMargin=1.3 * cm, leftMargin=1.3 * cm,
-        topMargin=1.2 * cm, bottomMargin=1.2 * cm
+        rightMargin=1.0 * cm, leftMargin=1.0 * cm,
+        topMargin=0.8 * cm, bottomMargin=0.8 * cm
     )
-    doc.build(story)
+    doc.build(content)
     buf.seek(0)
     return buf.getvalue()
 
 
 # ===================== PDF：全班（students list） =====================
-def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=None, pdf_print_benchmark=True):
+def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=None, include_benchmarks=False):
+    base_styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "BigTitle", parent=base_styles["Title"],
+        fontName=FONT, fontSize=16, leading=18,
+        alignment=1, spaceAfter=4
+    )
+    info_style = ParagraphStyle(
+        "Info", parent=base_styles["Normal"],
+        fontName=FONT, fontSize=9, leading=11, spaceAfter=2
+    )
+    summary_style = ParagraphStyle(
+        "Summary", parent=base_styles["Normal"],
+        fontName=FONT, fontSize=8, leading=10
+    )
+
     story = []
+    available_width = A4[0] - 1.0 * cm - 1.0 * cm
+    available_height = A4[1] - 1.0 * cm - 1.0 * cm
+
     for i, student in enumerate(students):
-        bench_df = None
+        scores_df = student.scores_df.copy()
+        numeric = scores_df["分數數字"].dropna().tolist()
+        avg = (sum(numeric) / len(numeric)) if numeric else None
+        mx = max(numeric) if numeric else None
+        mn = min(numeric) if numeric else None
+
+        content = []
+        content.append(Paragraph(f"{title_text} 成績單", title_style))
+        content.append(Spacer(1, 0.08 * cm))
+
+        extra_avg = f"　平均：{avg:.1f} 分" if avg is not None else ""
+        info_text = f"姓名：{student.name}　座號：{student.seat}{extra_avg}"
+        info_table = Table([[Paragraph(info_text, info_style)]], colWidths=[18.0 * cm])
+        info_table.setStyle(TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.6, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ]))
+        content.append(info_table)
+        content.append(Spacer(1, 0.12 * cm))
+
+        table_rows = [["科目", "評量範圍", "分數"]] + scores_df[["科目", "評量範圍", "分數"]].values.tolist()
+        table = Table(table_rows, colWidths=[3.3 * cm, 11.4 * cm, 2.2 * cm], repeatRows=1)
+        style_cmds = [
+            ("FONTNAME", (0, 0), (-1, -1), FONT),
+            ("FONTSIZE", (0, 0), (-1, -1), 8.2),
+            ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
+            ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+            ("ALIGN", (0, 0), (0, -1), "CENTER"),
+            ("ALIGN", (1, 1), (1, -1), "LEFT"),
+            ("ALIGN", (2, 1), (2, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ]
+        for r in range(1, len(table_rows)):
+            if r % 2 == 1:
+                style_cmds.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#F7F7F7")))
+        table.setStyle(TableStyle(style_cmds))
+        content.append(table)
+
+        if numeric:
+            content.append(Spacer(1, 0.08 * cm))
+            lines = [
+                f"可計算 {len(numeric)} 筆",
+                f"最高：{mx:.1f}　最低：{mn:.1f}　平均：{avg:.1f}",
+            ]
+            content.append(Paragraph("<br/>".join(lines), summary_style))
+
+        student_bench_df = None
         if benchmark_map:
-            bench_df = benchmark_map.get(student.seat)
-        story.extend(_make_single_student_story(student, title_text, bench_df, pdf_print_benchmark))
+            student_bench_df = benchmark_map.get(student.seat)
+
+        if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
+            content.append(Spacer(1, 0.08 * cm))
+            content.append(Paragraph("頂前均後底標", info_style))
+            bench_rows = [["欄位", "頂", "前", "均", "後", "底"]]
+            for _, r in student_bench_df.iterrows():
+                bench_rows.append([
+                    str(r.get("欄位", "")),
+                    str(r.get("頂標", "")),
+                    str(r.get("前標", "")),
+                    str(r.get("均標", "")),
+                    str(r.get("後標", "")),
+                    str(r.get("底標", "")),
+                ])
+            bench_table = Table(bench_rows, colWidths=[7.2 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm], repeatRows=1)
+            bench_table.setStyle(TableStyle([
+                ("FONTNAME", (0, 0), (-1, -1), FONT),
+                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+                ("BOX", (0, 0), (-1, -1), 0.6, colors.black),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ]))
+            content.append(bench_table)
+
+        fitted = KeepInFrame(available_width, available_height, content, mode="shrink")
+        story.append(fitted)
+
         if i != len(students) - 1:
             story.append(PageBreak())
 
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        rightMargin=1.3 * cm, leftMargin=1.3 * cm,
-        topMargin=1.2 * cm, bottomMargin=1.2 * cm
+        rightMargin=1.0 * cm, leftMargin=1.0 * cm,
+        topMargin=1.0 * cm, bottomMargin=1.0 * cm
     )
     doc.build(story)
     buf.seek(0)
     return buf.getvalue()
-
-
-def _make_single_student_story(student: StudentView, title_text: str, benchmark_df=None, pdf_print_benchmark=True):
-    base_styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "BigTitle", parent=base_styles["Title"],
-        fontName=FONT, fontSize=18, leading=22,
-        alignment=1, spaceAfter=6
-    )
-    info_style = ParagraphStyle(
-        "Info", parent=base_styles["Normal"],
-        fontName=FONT, fontSize=11, leading=13, spaceAfter=4
-    )
-    scores_df = student.scores_df.copy()
-    numeric = scores_df["分數數字"].dropna().tolist()
-    avg = (sum(numeric) / len(numeric)) if numeric else None
-
-    story = []
-    story.append(Paragraph(f"{title_text} 成績單", title_style))
-    story.append(Spacer(1, 0.15 * cm))
-    extra_avg = f"　平均：{avg:.1f} 分" if avg is not None else ""
-    info_text = f"姓名：{student.name}　座號：{student.seat}{extra_avg}"
-    info_table = Table([[Paragraph(info_text, info_style)]], colWidths=[18 * cm])
-    info_table.setStyle(TableStyle([
-        ("BOX", (0, 0), (-1, -1), 0.6, colors.grey),
-        ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]))
-    story.append(info_table)
-    story.append(Spacer(1, 0.22 * cm))
-
-    table_rows = [["科目", "評量範圍", "分數"]] + scores_df[["科目", "評量範圍", "分數"]].values.tolist()
-    table = Table(table_rows, colWidths=[4.2 * cm, 10.1 * cm, 2.4 * cm])
-    style_cmds = [
-        ("FONTNAME", (0, 0), (-1, -1), FONT),
-        ("FONTSIZE", (0, 0), (-1, -1), 11),
-        ("BOX", (0, 0), (-1, -1), 0.9, colors.black),
-        ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
-        ("ALIGN", (0, 0), (0, -1), "CENTER"),
-        ("ALIGN", (1, 1), (1, -1), "LEFT"),
-        ("ALIGN", (2, 1), (2, -1), "CENTER"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-    ]
-    for r in range(1, len(table_rows)):
-        if r % 2 == 1:
-            style_cmds.append(("BACKGROUND", (0, r), (-1, r), colors.HexColor("#F7F7F7")))
-    table.setStyle(TableStyle(style_cmds))
-    story.append(table)
-
-    if pdf_print_benchmark and benchmark_df is not None and not benchmark_df.empty:
-        story.append(Spacer(1, 0.18 * cm))
-        bench_rows = [["欄位", "頂", "前", "均", "後", "底"]]
-        for _, r in benchmark_df.iterrows():
-            bench_rows.append([
-                str(r["欄位"]), f"{r['頂標']:.1f}", f"{r['前標']:.1f}", f"{r['均標']:.1f}", f"{r['後標']:.1f}", f"{r['底標']:.1f}"
-            ])
-        bench_table = Table(bench_rows, colWidths=[6.0 * cm, 1.4 * cm, 1.4 * cm, 1.4 * cm, 1.4 * cm, 1.4 * cm])
-        bench_table.setStyle(TableStyle([
-            ("FONTNAME", (0, 0), (-1, -1), FONT),
-            ("FONTSIZE", (0, 0), (-1, -1), 7),
-            ("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
-            ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
-            ("ALIGN", (1, 1), (-1, -1), "CENTER"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 3),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-        ]))
-        story.append(bench_table)
-    return story
 
 
 # ===================== Streamlit UI =====================
@@ -815,7 +847,6 @@ if role == "admin":
 
     exam_name = st.text_input("考試名稱（例如：高二下第一次段考）", value="高二下第一次段考")
     title_text = st.text_input("PDF / 顯示標題（例如：第一次段考）", value="第一次段考")
-    pdf_print_benchmark = st.checkbox("成績單 PDF 列印五標", value=True)
 
     if uploaded:
         excel_bytes = uploaded.read()
@@ -843,11 +874,7 @@ if role == "admin":
                 all_labels,
                 default=default_main
             )
-            compare_labels = st.multiselect(
-                "哪些欄位要列入歷次比較",
-                all_labels,
-                default=default_main
-            )
+            pdf_include_benchmarks = st.checkbox("成績單 PDF 要列印頂前均後底標", value=False)
 
             with st.expander("預覽前 5 列", expanded=False):
                 st.dataframe(data_admin.head(5), use_container_width=True)
@@ -866,9 +893,9 @@ if role == "admin":
                     "rows": int(len(data_admin)),
                 }
                 analysis_config = make_analysis_config(
-                    score_columns_admin, avg_labels, benchmark_labels, compare_labels
+                    score_columns_admin, avg_labels, benchmark_labels,
+                    pdf_include_benchmarks=pdf_include_benchmarks
                 )
-                analysis_config["pdf_print_benchmark"] = bool(pdf_print_benchmark)
 
                 store = load_store()
                 store["exams"][exam_id] = {
@@ -916,10 +943,20 @@ if role == "admin":
         index=[eid for eid, _ in exam_choices].index(active_exam_id) if active_exam_id in [eid for eid, _ in exam_choices] else 0
     )
 
-    if st.button("設成學生端預設考試"):
-        store["active_exam"] = selected_admin_exam
-        save_store(store)
-        st.success("✅ 已更新預設考試。")
+    c_set, c_del = st.columns(2)
+    with c_set:
+        if st.button("設成學生端預設考試"):
+            store["active_exam"] = selected_admin_exam
+            save_store(store)
+            st.success("✅ 已更新預設考試。")
+    with c_del:
+        if st.button("🗑️ 刪除這份已保存資料", type="secondary"):
+            store["exams"].pop(selected_admin_exam, None)
+            remaining_ids = list(store["exams"].keys())
+            store["active_exam"] = remaining_ids[0] if remaining_ids else None
+            save_store(store)
+            st.success("✅ 已刪除這份考試資料。")
+            st.rerun()
 
     exam_obj = store["exams"][selected_admin_exam]
     dataset = load_exam_dataset(exam_obj)
@@ -932,7 +969,7 @@ if role == "admin":
     analysis_config2 = dataset["analysis_config"]
 
     st.caption(
-        f"考試名稱：{meta2.get('exam_name','-')}｜資料筆數：{meta2.get('rows','-')}｜更新時間：{meta2.get('updated_at','-')}"
+        f"考試名稱：{meta2.get('exam_name','-')}｜資料筆數：{meta2.get('rows','-')}｜更新時間：{meta2.get('updated_at','-')}｜PDF列印五標：{'是' if analysis_config2.get('pdf_include_benchmarks') else '否'}"
     )
 
     excel_filename = f"original_{meta2.get('exam_name','scores')}_{meta2.get('updated_at','')}.xlsx".replace(":", "-")
@@ -988,16 +1025,19 @@ if role == "admin":
                 build_student_view_by_row(data2, subjects2, evals2, seat_idx2, name_idx2, r)
                 for r in rows_list
             ]
-            bench_df_all = compute_benchmark_table(
+            bench_full_df = compute_benchmark_table(
                 data2, subjects2, evals2, seat_idx2, name_idx2,
                 benchmark_indices=analysis_config2.get("benchmark_indices", [])
             )
-            benchmark_map = {s.seat: filter_benchmark_table_for_student(bench_df_all, s) for s in students}
+            benchmark_map = {}
+            for stu in students:
+                benchmark_map[stu.seat] = filter_benchmarks_for_student(bench_full_df, stu.scores_df)
+
             class_pdf = make_class_pdf_from_students(
                 students,
                 title_text=meta2.get("title_text", "成績"),
                 benchmark_map=benchmark_map,
-                pdf_print_benchmark=analysis_config2.get("pdf_print_benchmark", True)
+                include_benchmarks=analysis_config2.get("pdf_include_benchmarks", False)
             )
             pdf_name = f"class_scores_{meta2.get('exam_name','scores')}_{meta2.get('updated_at','')}.pdf".replace(":", "-")
 
@@ -1098,11 +1138,27 @@ else:
         if len(mine_num) == 0:
             st.info("你目前沒有被納入分析的數字分數。")
         else:
-            compare = chart_compare_dataframe(student, class_avg, analysis_config.get("avg_indices", []))
+            mine_by_subj = (
+                mine_num.groupby("科目", as_index=False)["分數數字"]
+                .mean()
+                .rename(columns={"分數數字": "我的成績"})
+            )
+
+            class_avg2 = (
+                class_avg.groupby("科目", as_index=False)["班級平均"].mean()
+                if not class_avg.empty
+                else pd.DataFrame(columns=["科目", "班級平均"])
+            )
+
+            compare = pd.merge(class_avg2, mine_by_subj, on="科目", how="outer")
+            compare["班級平均"] = pd.to_numeric(compare["班級平均"], errors="coerce")
+            compare["我的成績"] = pd.to_numeric(compare["我的成績"], errors="coerce")
+            compare = compare.dropna(subset=["班級平均", "我的成績"], how="all")
+
             st.dataframe(compare, use_container_width=True)
 
             if not compare.empty:
-                st.caption("圖例：班級平均＝班上的平均成績；我的成績＝你自己的平均成績")
+                st.caption("圖例：班級平均＝班上的平均成績；我的成績＝你自己的成績")
                 line_df = compare.melt(
                     id_vars=["科目"],
                     value_vars=["班級平均", "我的成績"],
@@ -1116,71 +1172,58 @@ else:
                     .encode(
                         x=alt.X("科目:N", title=None),
                         y=alt.Y("分數:Q", title="分數"),
-                        color=alt.Color("類別:N", legend=alt.Legend(title="圖表說明")),
-                        strokeDash=alt.StrokeDash("類別:N", legend=None),
+                        color=alt.Color("類別:N", legend=alt.Legend(title=None)),
                         tooltip=["科目:N", "類別:N", alt.Tooltip("分數:Q", format=".1f")]
                     )
                     .properties(height=320)
                 )
                 st.altair_chart(chart, use_container_width=True)
 
-    with st.expander("📈 與其他段考比較", expanded=False):
-        compare_candidates = [eid for eid, _ in exam_choices if eid != selected_exam]
-        if not compare_candidates:
-            st.info("目前只有一份考試資料，還不能比較。")
-        else:
-            compare_exam = st.selectbox(
-                "選擇要比較的另一份考試",
-                options=[""] + compare_candidates,
-                format_func=lambda x: "請選擇" if x == "" else exam_id_to_label.get(x, x)
-            )
-            if compare_exam:
-                ds_old = load_exam_dataset(store["exams"][compare_exam])
-                data_old = ds_old["data"]
-                seat_idx_old = ds_old["seat_idx"]
-                name_idx_old = ds_old["name_idx"]
-
-                all_old_seats = {seat_to_str(x) for x in data_old.iloc[:, seat_idx_old].tolist() if seat_to_str(x) != ""}
-                if seat_value not in all_old_seats:
-                    st.warning("另一份考試裡查不到你的座號，無法比較。")
-                else:
-                    student_old = build_student_view(data_old, ds_old["subjects"], ds_old["evals"], seat_idx_old, name_idx_old, seat_value)
-
-                    old_table = build_compare_table(student_old, ds_old["analysis_config"].get("compare_indices", []))
-                    new_table = build_compare_table(student, analysis_config.get("compare_indices", []))
-
-                    merged = pd.merge(
-                        old_table, new_table, on="科目", how="outer", suffixes=(
-                            f"（{ds_old['meta'].get('exam_name', '舊')})",
-                            f"（{meta.get('exam_name', '新')})"
-                        )
-                    )
-                    col_old = [c for c in merged.columns if c.startswith("分數（")][0]
-                    col_new = [c for c in merged.columns if c.endswith(f"（{meta.get('exam_name', '新')})")][0]
-                    merged["變化"] = pd.to_numeric(merged[col_new], errors="coerce") - pd.to_numeric(merged[col_old], errors="coerce")
-                    st.dataframe(merged, use_container_width=True)
-
     with st.expander("📏 這份考試的五標", expanded=False):
         bench_df = compute_benchmark_table(
             data, subjects, evals, seat_idx, name_idx,
             benchmark_indices=analysis_config.get("benchmark_indices", [])
         )
-        bench_df = filter_benchmark_table_for_student(bench_df, student)
-        if bench_df.empty:
-            st.info("這次成績裡沒有屬於你的五標欄位。")
+        student_bench_df = filter_benchmarks_for_student(bench_df, student.scores_df)
+        if student_bench_df.empty:
+            st.info("老師這份考試沒有設定屬於你這次成績的五標欄位。")
         else:
-            st.dataframe(bench_df, use_container_width=True)
+            st.dataframe(student_bench_df, use_container_width=True)
 
-    bench_df_pdf = compute_benchmark_table(
+    bench_df_for_pdf = compute_benchmark_table(
         data, subjects, evals, seat_idx, name_idx,
         benchmark_indices=analysis_config.get("benchmark_indices", [])
     )
-    bench_df_pdf = filter_benchmark_table_for_student(bench_df_pdf, student)
+    student_bench_df_for_pdf = filter_benchmarks_for_student(bench_df_for_pdf, student.scores_df)
+
+    class_avg_pdf = compute_class_avg(
+        data, subjects, evals, seat_idx, name_idx,
+        allowed_indices=analysis_config.get("avg_indices", [])
+    )
+    mine_pdf = student.scores_df.dropna(subset=["分數數字"]).copy()
+    if analysis_config.get("avg_indices"):
+        mine_pdf = mine_pdf[mine_pdf["欄位索引"].isin(analysis_config.get("avg_indices", []))]
+    my_pdf_avg = (
+        mine_pdf.groupby("科目", as_index=False)["分數數字"]
+        .mean()
+        .rename(columns={"分數數字": "我的成績"})
+        if not mine_pdf.empty else pd.DataFrame(columns=["科目", "我的成績"])
+    )
+    class_avg_pdf2 = (
+        class_avg_pdf.groupby("科目", as_index=False)["班級平均"].mean()
+        if not class_avg_pdf.empty else pd.DataFrame(columns=["科目", "班級平均"])
+    )
+    compare_pdf_df = pd.merge(class_avg_pdf2, my_pdf_avg, on="科目", how="outer")
+    compare_pdf_df["班級平均"] = pd.to_numeric(compare_pdf_df["班級平均"], errors="coerce")
+    compare_pdf_df["我的成績"] = pd.to_numeric(compare_pdf_df["我的成績"], errors="coerce")
+    compare_pdf_df = compare_pdf_df.dropna(subset=["班級平均", "我的成績"], how="all")
+
     pdf_bytes = make_single_student_pdf_bytes(
         student,
         title_text=meta.get("title_text", "成績"),
-        benchmark_df=bench_df_pdf,
-        pdf_print_benchmark=analysis_config.get("pdf_print_benchmark", True)
+        student_bench_df=student_bench_df_for_pdf,
+        include_benchmarks=analysis_config.get("pdf_include_benchmarks", False),
+        compare_df=compare_pdf_df
     )
     st.download_button(
         "⬇️ 下載我的 PDF 成績單",
