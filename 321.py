@@ -248,13 +248,14 @@ def labels_to_indices(score_columns, labels):
     return [c["index"] for c in score_columns if c["label"] in label_set]
 
 
-def make_analysis_config(score_columns, avg_labels, benchmark_labels, pdf_include_benchmarks=False):
+def make_analysis_config(score_columns, avg_labels, benchmark_labels, pdf_include_benchmarks=False, pdf_include_chart=True):
     return {
         "avg_fields": avg_labels or [],
         "benchmark_fields": benchmark_labels or [],
         "avg_indices": labels_to_indices(score_columns, avg_labels),
         "benchmark_indices": labels_to_indices(score_columns, benchmark_labels),
         "pdf_include_benchmarks": bool(pdf_include_benchmarks),
+        "pdf_include_chart": bool(pdf_include_chart),
     }
 
 
@@ -558,7 +559,7 @@ def build_pdf_compare_chart(compare_df: pd.DataFrame):
 
 
 # ===================== PDF：單一學生 =====================
-def make_single_student_pdf_bytes(student: StudentView, title_text: str, student_bench_df=None, include_benchmarks=False, compare_df=None):
+def make_single_student_pdf_bytes(student: StudentView, title_text: str, student_bench_df=None, include_benchmarks=False, compare_df=None, include_chart=True):
     base_styles = getSampleStyleSheet()
     title_style = ParagraphStyle(
         "BigTitle", parent=base_styles["Title"],
@@ -633,7 +634,7 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str, student
             ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
         ]))
 
-    chart = build_pdf_compare_chart(compare_df)
+    chart = build_pdf_compare_chart(compare_df) if include_chart else None
     if bench_table is not None or chart is not None:
         content.append(Spacer(1, 0.14 * cm))
         bottom = Table([[bench_table if bench_table is not None else Spacer(1, 0.1 * cm),
@@ -660,7 +661,7 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str, student
 
 
 # ===================== PDF：全班（students list） =====================
-def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=None, include_benchmarks=False):
+def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=None, include_benchmarks=False, compare_map=None, include_chart=True):
     base_styles = getSampleStyleSheet()
 
     title_style = ParagraphStyle(
@@ -739,9 +740,8 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
         if benchmark_map:
             student_bench_df = benchmark_map.get(student.seat)
 
+        bench_table = None
         if include_benchmarks and student_bench_df is not None and not student_bench_df.empty:
-            content.append(Spacer(1, 0.08 * cm))
-            content.append(Paragraph("頂前均後底標", info_style))
             bench_rows = [["欄位", "頂", "前", "均", "後", "底"]]
             for _, r in student_bench_df.iterrows():
                 bench_rows.append([
@@ -752,18 +752,36 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
                     str(r.get("後標", "")),
                     str(r.get("底標", "")),
                 ])
-            bench_table = Table(bench_rows, colWidths=[7.2 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm, 1.8 * cm], repeatRows=1)
+            bench_table = Table(bench_rows, colWidths=[3.8 * cm, 0.9 * cm, 0.9 * cm, 0.9 * cm, 0.9 * cm, 0.9 * cm])
             bench_table.setStyle(TableStyle([
                 ("FONTNAME", (0, 0), (-1, -1), FONT),
-                ("FONTSIZE", (0, 0), (-1, -1), 7.5),
-                ("BOX", (0, 0), (-1, -1), 0.6, colors.black),
-                ("GRID", (0, 0), (-1, -1), 0.35, colors.grey),
-                ("BACKGROUND", (0, 0), (-1, 0), colors.lightgrey),
+                ("FONTSIZE", (0, 0), (-1, -1), 7),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                ("ALIGN", (1, 1), (-1, -1), "CENTER"),
                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
                 ("TOPPADDING", (0, 0), (-1, -1), 2),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
             ]))
-            content.append(bench_table)
+
+        compare_df = compare_map.get(student.seat) if compare_map else None
+        chart = build_pdf_compare_chart(compare_df) if include_chart else None
+        if bench_table is not None or chart is not None:
+            content.append(Spacer(1, 0.14 * cm))
+            bottom = Table([[bench_table if bench_table is not None else Spacer(1, 0.1 * cm),
+                             chart if chart is not None else Spacer(1, 0.1 * cm)]],
+                           colWidths=[8.8 * cm, 8.8 * cm])
+            bottom.setStyle(TableStyle([
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]))
+            content.append(bottom)
 
         fitted = KeepInFrame(available_width, available_height, content, mode="shrink")
         story.append(fitted)
@@ -875,6 +893,7 @@ if role == "admin":
                 default=default_main
             )
             pdf_include_benchmarks = st.checkbox("成績單 PDF 要列印頂前均後底標", value=False)
+            pdf_include_chart = st.checkbox("成績單 PDF 要列印分析圖（班級平均 vs 我的成績）", value=True)
 
             with st.expander("預覽前 5 列", expanded=False):
                 st.dataframe(data_admin.head(5), use_container_width=True)
@@ -894,7 +913,8 @@ if role == "admin":
                 }
                 analysis_config = make_analysis_config(
                     score_columns_admin, avg_labels, benchmark_labels,
-                    pdf_include_benchmarks=pdf_include_benchmarks
+                    pdf_include_benchmarks=pdf_include_benchmarks,
+                    pdf_include_chart=pdf_include_chart
                 )
 
                 store = load_store()
@@ -969,7 +989,7 @@ if role == "admin":
     analysis_config2 = dataset["analysis_config"]
 
     st.caption(
-        f"考試名稱：{meta2.get('exam_name','-')}｜資料筆數：{meta2.get('rows','-')}｜更新時間：{meta2.get('updated_at','-')}｜PDF列印五標：{'是' if analysis_config2.get('pdf_include_benchmarks') else '否'}"
+        f"考試名稱：{meta2.get('exam_name','-')}｜資料筆數：{meta2.get('rows','-')}｜更新時間：{meta2.get('updated_at','-')}｜PDF列印五標：{'是' if analysis_config2.get('pdf_include_benchmarks') else '否'}｜PDF列印分析圖：{'是' if analysis_config2.get('pdf_include_chart', True) else '否'}"
     )
 
     excel_filename = f"original_{meta2.get('exam_name','scores')}_{meta2.get('updated_at','')}.xlsx".replace(":", "-")
@@ -1223,7 +1243,8 @@ else:
         title_text=meta.get("title_text", "成績"),
         student_bench_df=student_bench_df_for_pdf,
         include_benchmarks=analysis_config.get("pdf_include_benchmarks", False),
-        compare_df=compare_pdf_df
+        compare_df=compare_pdf_df,
+        include_chart=analysis_config.get("pdf_include_chart", True)
     )
     st.download_button(
         "⬇️ 下載我的 PDF 成績單",
