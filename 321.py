@@ -11,7 +11,6 @@ import pandas as pd
 import streamlit as st
 import yaml
 import streamlit_authenticator as stauth
-import matplotlib.pyplot as plt
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
@@ -21,6 +20,8 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.graphics.shapes import Drawing, String
+from reportlab.graphics.charts.barcharts import VerticalBarChart
 
 
 # ===================== 路徑/基本設定 =====================
@@ -447,24 +448,44 @@ def make_compare_chart_image(student: StudentView, data, subjects, evals, seat_i
         return Spacer(1, 0.1 * cm)
 
     compare = compare.sort_values("科目").reset_index(drop=True)
-    fig_h = 2.35
-    fig, ax = plt.subplots(figsize=(3.4, fig_h), dpi=160)
-    x = range(len(compare))
-    width = 0.38
-    ax.bar([i - width / 2 for i in x], compare["班級平均"], width=width, label="班級平均")
-    ax.bar([i + width / 2 for i in x], compare["個人平均"], width=width, label="個人平均")
-    ax.set_xticks(list(x))
-    ax.set_xticklabels(compare["科目"].tolist(), fontsize=7)
-    ax.tick_params(axis="y", labelsize=7)
-    ax.set_ylim(0, max(100, float(compare[["班級平均", "個人平均"]].max().max()) + 5))
-    ax.legend(fontsize=7, loc="upper right")
-    ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout(pad=0.6)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", bbox_inches="tight", transparent=False)
-    plt.close(fig)
-    buf.seek(0)
-    return Image(buf, width=8.1 * cm, height=5.2 * cm)
+    labels = compare["科目"].astype(str).tolist()[:6]
+    class_vals = [float(v) if pd.notna(v) else 0.0 for v in compare["班級平均"].tolist()[:6]]
+    mine_vals = [float(v) if pd.notna(v) else 0.0 for v in compare["個人平均"].tolist()[:6]]
+
+    width = 8.1 * cm
+    height = 5.0 * cm
+    d = Drawing(width, height)
+
+    title = String(4, height - 9, "全班平均 vs 個人平均", fontName=FONT, fontSize=7.5)
+    d.add(title)
+
+    chart = VerticalBarChart()
+    chart.x = 20
+    chart.y = 16
+    chart.width = width - 32
+    chart.height = height - 34
+    chart.data = [class_vals, mine_vals]
+    chart.strokeColor = colors.grey
+    chart.valueAxis.valueMin = 0
+    chart.valueAxis.valueMax = max(100, int(max(class_vals + mine_vals + [100]) / 10 + 1) * 10)
+    chart.valueAxis.valueStep = 20
+    chart.valueAxis.labels.fontName = FONT
+    chart.valueAxis.labels.fontSize = 6
+    chart.categoryAxis.categoryNames = labels
+    chart.categoryAxis.labels.fontName = FONT
+    chart.categoryAxis.labels.fontSize = 6
+    chart.categoryAxis.labels.boxAnchor = 'n'
+    chart.categoryAxis.labels.dy = -2
+    chart.barWidth = 7
+    chart.groupSpacing = 8
+    chart.barSpacing = 2
+    chart.bars[0].fillColor = colors.HexColor('#BFBFBF')
+    chart.bars[1].fillColor = colors.HexColor('#7F7F7F')
+    d.add(chart)
+
+    d.add(String(width - 68, height - 9, '班級平均', fontName=FONT, fontSize=6.5, fillColor=colors.HexColor('#555555')))
+    d.add(String(width - 30, height - 9, '個人平均', fontName=FONT, fontSize=6.5, fillColor=colors.black))
+    return d
 
 
 def build_student_report_story(student: StudentView, title_text: str, data=None, subjects=None, evals=None, seat_idx=None, name_idx=None):
