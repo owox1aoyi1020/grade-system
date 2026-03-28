@@ -20,8 +20,9 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.graphics.shapes import Drawing, String
-from reportlab.graphics.charts.barcharts import VerticalBarChart
+from reportlab.graphics.shapes import Drawing, String, Rect
+from reportlab.graphics.charts.linecharts import HorizontalLineChart
+from reportlab.graphics.widgets.markers import makeMarker
 
 
 # ===================== 路徑/基本設定 =====================
@@ -532,29 +533,56 @@ def build_pdf_compare_chart(compare_df: pd.DataFrame):
     class_vals = [float(x) if pd.notna(x) else 0.0 for x in compare_df["班級平均"].tolist()]
     my_vals = [float(x) if pd.notna(x) else 0.0 for x in compare_df["我的成績"].tolist()]
 
-    d = Drawing(8.2 * cm, 5.3 * cm)
-    chart = VerticalBarChart()
-    chart.x = 20
-    chart.y = 18
-    chart.height = 84
-    chart.width = 178
-    chart.data = [class_vals, my_vals]
+    width = 8.6 * cm
+    height = 5.4 * cm
+    d = Drawing(width, height)
+
+    bg = Rect(0, 0, width, height, fillColor=colors.HexColor("#07111F"), strokeColor=colors.HexColor("#07111F"))
+    d.add(bg)
+
+    chart = HorizontalLineChart()
+    chart.x = 26
+    chart.y = 26
+    chart.width = width - 54
+    chart.height = height - 48
+    chart.data = [my_vals, class_vals]
+    chart.joinedLines = 1
+    chart.lines[0].strokeColor = colors.HexColor("#CFE8FF")
+    chart.lines[0].strokeWidth = 1.8
+    chart.lines[0].symbol = makeMarker('FilledCircle')
+    chart.lines[0].symbol.fillColor = colors.HexColor("#CFE8FF")
+    chart.lines[0].symbol.strokeColor = colors.HexColor("#CFE8FF")
+    chart.lines[0].symbol.size = 4
+    chart.lines[1].strokeColor = colors.HexColor("#2F78FF")
+    chart.lines[1].strokeWidth = 1.8
+    chart.lines[1].symbol = makeMarker('FilledCircle')
+    chart.lines[1].symbol.fillColor = colors.HexColor("#2F78FF")
+    chart.lines[1].symbol.strokeColor = colors.HexColor("#2F78FF")
+    chart.lines[1].symbol.size = 4
+
     chart.categoryAxis.categoryNames = labels
     chart.categoryAxis.labels.fontName = FONT
     chart.categoryAxis.labels.fontSize = 7
+    chart.categoryAxis.labels.fillColor = colors.white
+    chart.categoryAxis.labels.angle = 90
+    chart.categoryAxis.labels.dy = -10
+    chart.categoryAxis.strokeColor = colors.HexColor("#50627A")
+
     chart.valueAxis.labels.fontName = FONT
     chart.valueAxis.labels.fontSize = 7
+    chart.valueAxis.labels.fillColor = colors.white
+    chart.valueAxis.strokeColor = colors.HexColor("#50627A")
     chart.valueAxis.valueMin = 0
     vmax = max(class_vals + my_vals + [100])
     chart.valueAxis.valueMax = max(100, int((vmax + 9) // 10) * 10)
     chart.valueAxis.valueStep = 20
-    chart.barSpacing = 3
-    chart.groupSpacing = 8
-    chart.bars[0].fillColor = colors.HexColor("#AFC8FF")
-    chart.bars[1].fillColor = colors.HexColor("#FFB4A2")
+    chart.valueAxis.visibleGrid = True
+    chart.valueAxis.gridStrokeColor = colors.HexColor("#2A3A4F")
+    chart.valueAxis.gridStrokeWidth = 0.4
     d.add(chart)
-    d.add(String(8, 108, "班級平均", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#4F6FAF")))
-    d.add(String(82, 108, "我的成績", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#C35B3E")))
+
+    d.add(String(width - 56, height - 18, "我的平均", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#CFE8FF")))
+    d.add(String(width - 56, height - 32, "班級平均", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#2F78FF")))
     return d
 
 
@@ -637,8 +665,8 @@ def make_single_student_pdf_bytes(student: StudentView, title_text: str, student
     chart = build_pdf_compare_chart(compare_df) if include_chart else None
     if bench_table is not None or chart is not None:
         content.append(Spacer(1, 0.14 * cm))
-        bottom = Table([[bench_table if bench_table is not None else Spacer(1, 0.1 * cm),
-                         chart if chart is not None else Spacer(1, 0.1 * cm)]],
+        bottom = Table([[chart if chart is not None else Spacer(1, 0.1 * cm),
+                         bench_table if bench_table is not None else Spacer(1, 0.1 * cm)]],
                        colWidths=[8.8 * cm, 8.8 * cm])
         bottom.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -771,8 +799,8 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
         chart = build_pdf_compare_chart(compare_df) if include_chart else None
         if bench_table is not None or chart is not None:
             content.append(Spacer(1, 0.14 * cm))
-            bottom = Table([[bench_table if bench_table is not None else Spacer(1, 0.1 * cm),
-                             chart if chart is not None else Spacer(1, 0.1 * cm)]],
+            bottom = Table([[chart if chart is not None else Spacer(1, 0.1 * cm),
+                             bench_table if bench_table is not None else Spacer(1, 0.1 * cm)]],
                            colWidths=[8.8 * cm, 8.8 * cm])
             bottom.setStyle(TableStyle([
                 ("VALIGN", (0, 0), (-1, -1), "TOP"),
