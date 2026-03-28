@@ -528,61 +528,53 @@ def build_pdf_compare_chart(compare_df: pd.DataFrame):
     if compare_df.empty:
         return None
 
-    compare_df = compare_df.head(6).fillna(0)
+    compare_df = compare_df.head(6).copy()
+    compare_df["班級平均"] = pd.to_numeric(compare_df["班級平均"], errors="coerce")
+    compare_df["我的成績"] = pd.to_numeric(compare_df["我的成績"], errors="coerce")
+    compare_df = compare_df.fillna(0)
+
     labels = [str(x)[:8] for x in compare_df["科目"].tolist()]
-    class_vals = [float(x) if pd.notna(x) else 0.0 for x in compare_df["班級平均"].tolist()]
-    my_vals = [float(x) if pd.notna(x) else 0.0 for x in compare_df["我的成績"].tolist()]
+    my_vals = [float(x) for x in compare_df["我的成績"].tolist()]
+    class_vals = [float(x) for x in compare_df["班級平均"].tolist()]
 
-    width = 8.6 * cm
-    height = 5.4 * cm
-    d = Drawing(width, height)
-
-    bg = Rect(0, 0, width, height, fillColor=colors.HexColor("#07111F"), strokeColor=colors.HexColor("#07111F"))
-    d.add(bg)
+    d = Drawing(8.6 * cm, 5.8 * cm)
 
     chart = HorizontalLineChart()
-    chart.x = 26
-    chart.y = 26
-    chart.width = width - 54
-    chart.height = height - 48
+    chart.x = 30
+    chart.y = 28
+    chart.width = 155
+    chart.height = 86
     chart.data = [my_vals, class_vals]
-    chart.joinedLines = 1
-    chart.lines[0].strokeColor = colors.HexColor("#CFE8FF")
-    chart.lines[0].strokeWidth = 1.8
-    chart.lines[0].symbol = makeMarker('FilledCircle')
-    chart.lines[0].symbol.fillColor = colors.HexColor("#CFE8FF")
-    chart.lines[0].symbol.strokeColor = colors.HexColor("#CFE8FF")
-    chart.lines[0].symbol.size = 4
-    chart.lines[1].strokeColor = colors.HexColor("#2F78FF")
-    chart.lines[1].strokeWidth = 1.8
-    chart.lines[1].symbol = makeMarker('FilledCircle')
-    chart.lines[1].symbol.fillColor = colors.HexColor("#2F78FF")
-    chart.lines[1].symbol.strokeColor = colors.HexColor("#2F78FF")
-    chart.lines[1].symbol.size = 4
 
     chart.categoryAxis.categoryNames = labels
     chart.categoryAxis.labels.fontName = FONT
     chart.categoryAxis.labels.fontSize = 7
-    chart.categoryAxis.labels.fillColor = colors.white
     chart.categoryAxis.labels.angle = 90
-    chart.categoryAxis.labels.dy = -10
-    chart.categoryAxis.strokeColor = colors.HexColor("#50627A")
+    chart.categoryAxis.labels.dy = -14
 
     chart.valueAxis.labels.fontName = FONT
     chart.valueAxis.labels.fontSize = 7
-    chart.valueAxis.labels.fillColor = colors.white
-    chart.valueAxis.strokeColor = colors.HexColor("#50627A")
     chart.valueAxis.valueMin = 0
-    vmax = max(class_vals + my_vals + [100])
-    chart.valueAxis.valueMax = max(100, int((vmax + 9) // 10) * 10)
+    chart.valueAxis.valueMax = 100
     chart.valueAxis.valueStep = 20
-    chart.valueAxis.visibleGrid = True
-    chart.valueAxis.gridStrokeColor = colors.HexColor("#2A3A4F")
-    chart.valueAxis.gridStrokeWidth = 0.4
+
+    chart.lines[0].strokeColor = colors.HexColor("#BFD9FF")
+    chart.lines[0].strokeWidth = 2
+    chart.lines[1].strokeColor = colors.HexColor("#2F6FE4")
+    chart.lines[1].strokeWidth = 2
+
+    chart.lines[0].symbol = makeMarker('FilledCircle')
+    chart.lines[0].symbol.fillColor = colors.HexColor("#BFD9FF")
+    chart.lines[0].symbol.strokeColor = colors.HexColor("#BFD9FF")
+    chart.lines[1].symbol = makeMarker('FilledCircle')
+    chart.lines[1].symbol.fillColor = colors.HexColor("#2F6FE4")
+    chart.lines[1].symbol.strokeColor = colors.HexColor("#2F6FE4")
+
     d.add(chart)
 
-    d.add(String(width - 56, height - 18, "我的平均", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#CFE8FF")))
-    d.add(String(width - 56, height - 32, "班級平均", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#2F78FF")))
+    d.add(String(8, 126, "● 我的平均", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#BFD9FF")))
+    d.add(String(92, 126, "● 班級平均", fontName=FONT, fontSize=8, fillColor=colors.HexColor("#2F6FE4")))
+    d.add(String(2, 64, "分數", fontName=FONT, fontSize=8, fillColor=colors.white, angle=90))
     return d
 
 
@@ -1081,11 +1073,38 @@ if role == "admin":
             for stu in students:
                 benchmark_map[stu.seat] = filter_benchmarks_for_student(bench_full_df, stu.scores_df)
 
+            compare_map = {}
+            class_avg_pdf = compute_class_avg(
+                data2, subjects2, evals2, seat_idx2, name_idx2,
+                allowed_indices=analysis_config2.get("avg_indices", [])
+            )
+            class_avg_pdf2 = (
+                class_avg_pdf.groupby("科目", as_index=False)["班級平均"].mean()
+                if not class_avg_pdf.empty else pd.DataFrame(columns=["科目", "班級平均"])
+            )
+            for stu in students:
+                mine_pdf = stu.scores_df.dropna(subset=["分數數字"]).copy()
+                if analysis_config2.get("avg_indices"):
+                    mine_pdf = mine_pdf[mine_pdf["欄位索引"].isin(analysis_config2.get("avg_indices", []))]
+                my_pdf_avg = (
+                    mine_pdf.groupby("科目", as_index=False)["分數數字"]
+                    .mean()
+                    .rename(columns={"分數數字": "我的成績"})
+                    if not mine_pdf.empty else pd.DataFrame(columns=["科目", "我的成績"])
+                )
+                compare_df = pd.merge(class_avg_pdf2, my_pdf_avg, on="科目", how="outer")
+                compare_df["班級平均"] = pd.to_numeric(compare_df["班級平均"], errors="coerce")
+                compare_df["我的成績"] = pd.to_numeric(compare_df["我的成績"], errors="coerce")
+                compare_df = compare_df.dropna(subset=["班級平均", "我的成績"], how="all")
+                compare_map[stu.seat] = compare_df
+
             class_pdf = make_class_pdf_from_students(
                 students,
                 title_text=meta2.get("title_text", "成績"),
                 benchmark_map=benchmark_map,
-                include_benchmarks=analysis_config2.get("pdf_include_benchmarks", False)
+                include_benchmarks=analysis_config2.get("pdf_include_benchmarks", False),
+                compare_map=compare_map,
+                include_chart=analysis_config2.get("pdf_include_chart", True)
             )
             pdf_name = f"class_scores_{meta2.get('exam_name','scores')}_{meta2.get('updated_at','')}.pdf".replace(":", "-")
 
