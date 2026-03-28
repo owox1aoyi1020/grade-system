@@ -65,7 +65,22 @@ def load_store():
     if not os.path.exists(STORE_PATH):
         return None
     with open(STORE_PATH, "rb") as f:
-        return pickle.load(f)
+        obj = pickle.load(f)
+
+    # 向下相容舊版 store：可能只有 excel_bytes，沒有 meta
+    if isinstance(obj, dict):
+        if "meta" not in obj or not isinstance(obj.get("meta"), dict):
+            obj["meta"] = {}
+        meta = obj["meta"]
+        meta.setdefault("version", "legacy")
+        meta.setdefault("updated_at", datetime.now(TZ_TAIPEI).strftime("%Y-%m-%d %H:%M:%S"))
+        meta.setdefault("title_text", "成績")
+        meta.setdefault("sheet", 0)
+        meta.setdefault("subject_row", DEFAULT_SUBJECT_ROW)
+        meta.setdefault("eval_row", DEFAULT_EVAL_ROW)
+        meta.setdefault("header_row", DEFAULT_HEADER_ROW)
+        meta.setdefault("rows", 0)
+    return obj
 
 
 def seat_to_int_safe(seat: str) -> int:
