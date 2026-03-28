@@ -761,7 +761,7 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
                     str(r.get("後標", "")),
                     str(r.get("底標", "")),
                 ])
-            bench_table = Table(bench_rows, colWidths=[4.8 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm], repeatRows=1)
+            bench_table = Table(bench_rows, colWidths=[4.8 * cm, 1 * cm, 1 * cm, 0.75 * cm, 0.75 * cm, 0.75 * cm], repeatRows=1)
             bench_table.setStyle(TableStyle([
                 ("FONTNAME", (0, 0), (-1, -1), FONT),
                 ("FONTSIZE", (0, 0), (-1, -1), 5.9),
@@ -772,16 +772,6 @@ def make_class_pdf_from_students(students: list, title_text: str, benchmark_map=
                 ("TOPPADDING", (0, 0), (-1, -1), 1),
                 ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
             ]))
-
-        if numeric:
-            summary_lines = [
-                f"可計算 {len(numeric)} 筆",
-                f"最高：{mx:.1f}",
-                f"最低：{mn:.1f}",
-                f"平均：{avg:.1f}",
-            ]
-        else:
-            summary_lines = ["無可計算分數"]
 
         summary_box = Table(
             [[Paragraph("<br/>".join(summary_lines), summary_style)]],
@@ -890,8 +880,8 @@ if role == "admin":
     with c3:
         header_row = st.number_input("欄名列（含座號/姓名）（0-based）", min_value=0, value=DEFAULT_HEADER_ROW, step=1)
 
-    exam_name = st.text_input("考試名稱（例如：高二下第一次段考）", value="高二下第一次段考")
-    title_text = st.text_input("PDF / 顯示標題（例如：第一次段考）", value="第一次段考")
+    exam_name = st.text_input("考試名稱（例如：高二下第一次小考）", value="")
+    title_text = st.text_input("PDF / 顯示標題（例如：第一小段考）", value="")
 
     if uploaded:
         excel_bytes = uploaded.read()
@@ -916,11 +906,6 @@ if role == "admin":
             )
             benchmark_labels = st.multiselect(
                 "哪些欄位要列入五標",
-                all_labels,
-                default=default_main
-            )
-            compare_labels = st.multiselect(
-                "哪些欄位要列入歷次比較",
                 all_labels,
                 default=default_main
             )
