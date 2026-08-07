@@ -9,6 +9,14 @@ credentials:
       name: "鄭右玫 老師"
       password: "123456"
       role: "admin"
+    test1:
+      name: "示範帳號"
+      password: "345678"
+      role: "admin"
+    "test2'
+      name: "示範帳號"
+      password: "345678"
+      role: "student"
     "20401":
       name: "王佑宇"
       password: "a29jrfnji"
